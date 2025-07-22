@@ -1,0 +1,19 @@
+{
+  "name": "deriv-rsi-bot",
+  "version": "1.0.0",
+  "description": "RSI-based auto trading bot for Deriv",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@deriv/deriv-api": "^1.0.15",
+    "@tensorflow/tfjs-node": "^4.22.0",
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0",
+    "mongodb": "^6.16.0",
+    "mongoose": "^8.14.0",
+    "technicalindicators": "^3.1.0",
+    "ws": "^8.13.0"
+  }
+}
