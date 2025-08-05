@@ -1,0 +1,88 @@
+const fs = require('fs');
+const { RSI, EMA, MACD, ATR } = require('technicalindicators');
+
+const WINDOW_SIZE = 10;
+const PROFIT_HORIZON = 5;
+const PROFIT_THRESHOLD = 0.002; // 0.2%
+
+// Read CSV
+const raw = fs.readFileSync('training_data.csv', 'utf8').split('\n');
+const header = raw[0].split(',');
+const data = raw.slice(1).filter(Boolean).map(line => line.split(',').map(Number));
+
+// Calculate technical indicators for the entire dataset
+function calculateIndicators(prices) {
+    const closePrices = prices.map(p => p[header.indexOf('close')]);
+    const highPrices = prices.map(p => p[header.indexOf('high')]);
+    const lowPrices = prices.map(p => p[header.indexOf('low')]);
+    
+    const rsi = RSI.calculate({ values: closePrices, period: 14 });
+    const emaShort = EMA.calculate({ values: closePrices, period: 5 });
+    const emaLong = EMA.calculate({ values: closePrices, period: 12 });
+    const macd = MACD.calculate({
+        values: closePrices,
+        fastPeriod: 12,
+        slowPeriod: 26,
+        signalPeriod: 9,
+        SimpleMAOscillator: false,
+        SimpleMASignal: false
+    });
+    const atr = ATR.calculate({
+        high: highPrices,
+        low: lowPrices,
+        close: closePrices,
+        period: 14
+    });
+
+    return { rsi, emaShort, emaLong, macd, atr };
+}
+
+const rows = [];
+for (let i = 0; i < data.length - WINDOW_SIZE - PROFIT_HORIZON; i++) {
+    // Get window of data
+    const windowData = data.slice(i, i + WINDOW_SIZE);
+    
+    // Calculate indicators for window
+    const indicators = calculateIndicators(windowData);
+    
+    // Build feature window
+    let window = [];
+    for (let j = 0; j < WINDOW_SIZE; j++) {
+        const candle = windowData[j];
+        const close = candle[header.indexOf('close')];
+        const high = candle[header.indexOf('high')];
+        const low = candle[header.indexOf('low')];
+        const open = candle[header.indexOf('open')];
+        
+        // Add features for this candle
+        window = window.concat([
+            close,
+            high,
+            low,
+            open,
+            high - low, // Range
+            close - open, // Body
+            Math.abs(close - open), // Absolute body
+            high - Math.max(open, close), // Upper shadow
+            Math.min(open, close) - low, // Lower shadow
+            // Technical indicators (with padding for initial periods)
+            indicators.rsi[j] || 50,
+            indicators.emaShort[j] || close,
+            indicators.emaLong[j] || close,
+            indicators.macd[j]?.MACD || 0,
+            indicators.atr[j] || (high - low)
+        ]);
+    }
+    
+    // Calculate label
+    const futureClose = data[i + WINDOW_SIZE + PROFIT_HORIZON][header.indexOf('close')];
+    const currentClose = data[i + WINDOW_SIZE - 1][header.indexOf('close')];
+    const label = (futureClose >= currentClose * (1 + PROFIT_THRESHOLD)) ? 1 : 0;
+    
+    rows.push([...window, label]);
+}
+
+// Save to CSV
+const outputData = rows.map(row => row.join(',')).join('\n');
+fs.writeFileSync('pattern_training_data.csv', outputData);
+console.log('✅ Saved pattern_training_data.csv for ML pattern recognition.');

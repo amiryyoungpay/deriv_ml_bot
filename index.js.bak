@@ -8,26 +8,10 @@ const EMA = require('technicalindicators').EMA;
 const MACD = require('technicalindicators').MACD;
 const ATR = require('technicalindicators').ATR;
 const PatternModel = require('./ml/PatternModel');
-const AutoTrainer = require('./auto_trainer');
 
-// Configuration
-const config = {
-    DERIV_TOKEN: 'UQg4GJ2zKwuaupJ', // Your demo account token
-    MONGO_URI: 'mongodb+srv://sirtheprogrammer:01319943591Bk.@cluster0.p2rjers.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
-    SYMBOL: 'R_100', // Trading asset
-    STAKE_AMOUNT: 1.00, // Initial stake amount in USD
-    MAX_DAILY_LOSS: -50, // Stop trading if daily loss exceeds this
-    MAX_STAKE: 10, // Maximum stake per trade
-    MIN_STAKE: 1, // Minimum stake per trade
-    TRADE_INTERVAL: 5, // Time between trades in minutes
-    IS_DEMO: true, // Safety flag for demo account
-    
-    // Auto-training settings
-    TRAINING_INTERVAL: '0 */1 * * *', // Every hour
-    FULL_RETRAIN_INTERVAL: '0 0 * * *', // Daily at midnight
-    MIN_TRAINING_DATA: 1000, // Minimum candles needed for training
-    DATA_COLLECTION_INTERVAL: 60, // Collect data every 60 seconds
-};
+const DERIV_TOKEN = 'yrrFd2hQpe8QD71';
+const MONGO_URI = 'mongodb+srv://sirtheprogrammer:01319943591Bk.@cluster0.p2rjers.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const X_API_KEY = 'AAAAAAAAAAAAAAAAAAAAADN70wEAAAAAftssinLsML3w%2BUa6rhl%2FkWQ1xIo%3Dv7CaRILGhk2ExZZ3Lyf7H7eSmx2MfqiQeoVbax9qdoYMfYmDoA';
 
 let ws;
 let reconnectTimeout = 3000;
@@ -61,7 +45,7 @@ let lastTradeTime = null;
 let currentContractId = null;
 let accountBalance = 1000;
 
-mongoose.connect(config.MONGO_URI, {
+mongoose.connect(MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true
 }).then(() => console.log('🧠 MongoDB locked, ready to dominate')).catch(err => console.error('❌ MongoDB Error:', err));
@@ -114,21 +98,16 @@ async function processMarketData() {
 }
 
 async function processTick(tick) {
-    if (!tick || !tick.epoch || !tick.close) return;
-
     const price = {
         timestamp: tick.epoch,
-        open: tick.open || tick.close,  // Use close if open is not available
-        high: tick.high || tick.close,  // Use close if high is not available
-        low: tick.low || tick.close,    // Use close if low is not available
+        open: tick.open,
+        high: tick.high,
+        low: tick.low,
         close: tick.close
     };
     
     prices.push(price);
     if (prices.length > 100) prices.shift(); // Keep last 100 prices
-
-    // Wait until we have enough data
-    if (prices.length < 20) return;
 
     // Update technical indicators
     macdInput.values = prices.map(p => p.close);
@@ -139,19 +118,12 @@ async function processTick(tick) {
         period: 14
     }).pop();
 
-        // Get ML prediction directly
-    const mlSignal = await patternModel.predict(prices.slice(-10)).catch(err => {
-        console.error('❌ Prediction error:', err);
-        return null;
-    });
-    
+    // Get trading signals
+    const mlSignal = await processMarketData();
     if (!mlSignal) return;
 
-    const rsi = RSI.calculate({ 
-        values: prices.slice(-15).map(p => p.close),
-        period: 14 
-    }).pop();
-
+    // Combine ML signal with other indicators
+    const rsi = prices[prices.length - 1].rsi;
     const shouldTrade = evaluateTradeSignals(mlSignal, rsi);
     
     if (shouldTrade && !currentContractId) {
@@ -208,8 +180,7 @@ function evaluateTradeSignals(mlSignal, rsi) {
 }
 
 function initializeWebSocket() {
-        const endpoint = config.IS_DEMO ? 'wss://ws.binaryws.com/websockets/v3?app_id=1089' : 'wss://ws.binaryws.com/websockets/v3?app_id=72026';
-    ws = new WebSocket(endpoint, {
+    ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=72026', {
         headers: { 'User-Agent': getRandomUserAgent() }
     });
 
@@ -217,7 +188,7 @@ function initializeWebSocket() {
         console.log('🔌 WebSocket connected, dark mode ON');
         // Wait a bit before authorization
         setTimeout(() => {
-            ws.send(JSON.stringify({ authorize: config.DERIV_TOKEN }));
+            ws.send(JSON.stringify({ authorize: DERIV_TOKEN }));
             // Reset reconnect timeout on successful connection
             reconnectTimeout = 3000;
         }, 1000 + Math.random() * 2000);
@@ -237,7 +208,7 @@ function initializeWebSocket() {
 
         if (msg.msg_type === 'authorize') {
             console.log('✅ Authorized, let’s fuck up the market');
-            ws.send(JSON.stringify({ ticks: config.SYMBOL }));
+            ws.send(JSON.stringify({ ticks: 'R_100' }));
             ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
         }
 
@@ -247,9 +218,12 @@ function initializeWebSocket() {
         }
 
         if (msg.msg_type === 'tick') {
+            processTick(msg.tick);
+        }
+
+        if (msg.msg_type === 'tick') {
             const tick = msg.tick;
-            if (!tick) return;
-            processTick(tick);
+            if (!tick || !tick.quote) return;
 
             prices.push(tick.quote);
             if (prices.length > 100) {
@@ -293,18 +267,16 @@ function initializeWebSocket() {
                 const trendBias = lastEMAShort > lastEMALong ? 'bullish' : 'bearish';
                 const macdSignal = lastMACD && lastMACD.MACD > lastMACD.signal ? 'buy' : 'sell';
 
-                // Use ML model prediction instead of LSTM
-                const mlPrediction = await patternModel.predict(prices.slice(-10));
-                const confidence = calculateConfidence(lastRSI, mlPrediction.probability);
-                console.log(`📉 Price: ${tick.close} | RSI: ${lastRSI.toFixed(2)} | ML: ${mlPrediction.probability.toFixed(2)} | Confidence: ${confidence}`);
+                const confidence = calculateConfidence(lastRSI, lstmPred);
+                console.log(`📉 Price: ${tick.quote} | RSI: ${lastRSI.toFixed(2)} | LSTM: ${lstmPred.toFixed(2)} | Confidence: ${confidence}`);
 
                 if (confidence >= 0.7) {
                     const now = Date.now();
                     adjustTradeInterval(Math.abs(lastRSI - 50) / 50); // Volatility based on RSI
 
                     if (!lastTradeTime || now - lastTradeTime >= tradeInterval) {
-                        let action = mlPrediction.probability > 0.6 && lastRSI < 35 && trendBias === 'bullish' && macdSignal === 'buy' ? 'CALL' :
-                            mlPrediction.probability < 0.4 && lastRSI > 65 && trendBias === 'bearish' && macdSignal === 'sell' ? 'PUT' : null;
+                        let action = lstmPred > 0.6 && lastRSI < 35 && trendBias === 'bullish' && macdSignal === 'buy' ? 'CALL' :
+                            lstmPred < 0.4 && lastRSI > 65 && trendBias === 'bearish' && macdSignal === 'sell' ? 'PUT' : null;
 
                         if (action) {
                             lastTradeTime = now;
@@ -365,47 +337,24 @@ function calculateConfidence(rsi, lstmPred) {
     return Math.min(1, Math.max(0, 0.6 + rsiScore + lstmScore)).toFixed(2);
 }
 
-function calculateStake(confidence, winRate) {
-    // Kelly Criterion formula: f = (bp - q) / b
-    // where: b = odds - 1, p = win probability, q = 1 - p
-    const payout = 0.95; // Typical payout for binary options
-    const b = payout - 1;
-    const p = winRate || 0.5; // Use historical win rate or default to 0.5
-    const q = 1 - p;
-    
-    let kellyFraction = (b * p - q) / b;
-    kellyFraction = Math.max(0.01, Math.min(0.15, kellyFraction)); // Cap between 1-15%
-    
-    // Adjust stake by confidence and balance
-    const stake = accountBalance * kellyFraction * confidence;
-    
-    // Enforce min/max limits
-    return Math.max(config.MIN_STAKE, Math.min(config.MAX_STAKE, 
-        parseFloat(stake.toFixed(2))));
+function calculateLotSize(balance, confidence) {
+    const kellyFraction = 0.15; // More Aggressive
+    const risk = balance * kellyFraction * Math.pow(confidence, 1.5); // Increase Lot Size Exponentially with Confidence
+    return Math.max(0.01, Math.min(0.15, (risk / 10).toFixed(2))); // Cap Lot Size
 }
 
 async function executeTrade(action, rsi, confidence, signals, lotSize) {
-    // Check daily loss limit
-    const todayStats = await getDailyStats();
-    if (todayStats.totalLoss <= config.MAX_DAILY_LOSS) {
-        console.log(`🛑 Daily loss limit reached (${todayStats.totalLoss}). Stopping trades.`);
-        return;
-    }
-
-    // Calculate stake based on Kelly criterion and recent performance
-    const stake = calculateStake(confidence, todayStats.winRate);
-    
     const tradeDetails = {
         buy: 1,
-        price: stake,
+        price: 10,
         parameters: {
-            amount: stake,
+            amount: lotSize * 100,
             basis: 'stake',
             contract_type: action,
             currency: 'USD',
-            duration: 5,
-            duration_unit: 't',
-            symbol: config.SYMBOL
+            duration: 1,
+            duration_unit: 'm',
+            symbol: 'R_100'
         }
     };
 
@@ -438,35 +387,12 @@ async function logTradeResult(contract_id, outcome, profit) {
     analyzePerformance();
 }
 
-async function getDailyStats() {
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    
-    const trades = await Trade.find({
-        time: { $gte: today }
-    });
-    
-    const wins = trades.filter(t => t.result === 'win').length;
-    const totalProfit = trades.reduce((sum, t) => sum + (t.profit || 0), 0);
-    const totalLoss = trades.reduce((sum, t) => t.profit < 0 ? sum + t.profit : sum, 0);
-    const winRate = trades.length > 0 ? wins / trades.length : 0.5;
-    
-    return {
-        trades: trades.length,
-        wins,
-        totalProfit,
-        totalLoss,
-        winRate
-    };
-}
-
 async function analyzePerformance() {
-    const stats = await getDailyStats();
-    console.log(`📊 Today's Performance:
-    Trades: ${stats.trades}
-    Win Rate: ${(stats.winRate * 100).toFixed(1)}%
-    Profit: $${stats.totalProfit.toFixed(2)}
-    Max Drawdown: $${stats.totalLoss.toFixed(2)}`);
+    const trades = await Trade.find().sort({ time: -1 }).limit(100);
+    const wins = trades.filter(t => t.result === 'win').length;
+    const totalProfit = trades.reduce((sum, t) => sum + t.profit, 0);
+    const winRate = (wins / trades.length * 100).toFixed(2);
+    console.log(`📊 Win Rate: ${winRate}% | Total Profit: ${totalProfit}`);
 }
 
 function getRandomUserAgent() {
@@ -485,31 +411,7 @@ function adjustTradeInterval(volatility) {
     console.log(`⚙️ Trade interval adjusted to: ${tradeInterval.toFixed(0)}ms`);
 }
 
-async function startBot() {
-    try {
-        // Initialize AutoTrainer
-        const autoTrainer = new AutoTrainer(config);
-        await autoTrainer.start();
-
-        // Initialize trading system
-        await initializeML();
-        initializeWebSocket();
-
-        // Log startup
-        console.log(`
-🤖 Bot initialized with:
-- Symbol: ${config.SYMBOL}
-- Demo Mode: ${config.IS_DEMO ? 'Yes' : 'No'}
-- Auto-training: Every ${config.TRAINING_INTERVAL}
-- Full Retrain: ${config.FULL_RETRAIN_INTERVAL}
-- Initial Stake: $${config.STAKE_AMOUNT}
-- Max Daily Loss: $${Math.abs(config.MAX_DAILY_LOSS)}
-        `);
-    } catch (error) {
-        console.error('❌ Startup error:', error);
-        process.exit(1);
-    }
-}
-
-// Start the bot
-startBot();
+(async () => {
+    await initializeML();
+    initializeWebSocket();
+})();

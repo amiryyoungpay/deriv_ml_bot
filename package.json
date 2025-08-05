@@ -4,7 +4,10 @@
   "description": "RSI-based auto trading bot for Deriv",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "collect-data": "node data_collector.js",
+    "train": "node -e 'require(\"./auto_trainer\").fullRetrain()'",
+    "start:dev": "nodemon index.js"
   },
   "dependencies": {
     "@deriv/deriv-api": "^1.0.15",
@@ -13,7 +16,11 @@
     "dotenv": "^16.5.0",
     "mongodb": "^6.16.0",
     "mongoose": "^8.14.0",
+    "node-cron": "^4.2.1",
     "technicalindicators": "^3.1.0",
     "ws": "^8.13.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }
